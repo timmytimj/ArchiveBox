@@ -5,6 +5,7 @@ import os
 import sys
 import time
 import argparse
+from math import log
 from multiprocessing import Process
 from pathlib import Path
 
@@ -15,18 +16,16 @@ from typing import Optional, List, Dict, Union, IO, TYPE_CHECKING
 if TYPE_CHECKING:
     from .index.schema import Link, ArchiveResult
 
-from .index.json import MAIN_INDEX_HEADER
-
 from .util import enforce_types
 from .config import (
     ConfigDict,
+    OUTPUT_DIR,
     PYTHON_ENCODING,
     ANSI,
     IS_TTY,
     TERM_WIDTH,
-    OUTPUT_DIR,
+    SHOW_PROGRESS,
     SOURCES_DIR_NAME,
-    HTML_INDEX_FILENAME,
     stderr,
 )
 
@@ -86,7 +85,6 @@ class TimedProgress:
     """Show a progress bar and measure elapsed time until .end() is called"""
 
     def __init__(self, seconds, prefix=''):
-        from .config import SHOW_PROGRESS
         self.SHOW_PROGRESS = SHOW_PROGRESS
         if self.SHOW_PROGRESS:
             self.p = Process(target=progress_bar, args=(seconds, prefix))
@@ -103,9 +101,14 @@ class TimedProgress:
         if self.SHOW_PROGRESS:
             # terminate if we havent already terminated
             try:
+                # kill the progress bar subprocess
+                try:
+                    self.p.close()   # must be closed *before* its terminnated
+                except:
+                    pass
                 self.p.terminate()
                 self.p.join()
-                self.p.close()
+
 
                 # clear whole terminal line
                 try:
@@ -132,17 +135,18 @@ def progress_bar(seconds: int, prefix: str='') -> None:
                 sys.stdout.write('\r\n')
                 sys.stdout.flush()
             chunks = max_width - len(prefix) - 20
-            progress = s / chunks / seconds * 100
-            bar_width = round(progress/(100/chunks))
+            pct_complete = s / chunks / seconds * 100
+            log_pct = (log(pct_complete or 1, 10) / 2) * 100  # everyone likes faster progress bars ;)
+            bar_width = round(log_pct/(100/chunks))
             last_width = max_width
 
             # ████████████████████           0.9% (1/60sec)
             sys.stdout.write('\r{0}{1}{2}{3} {4}% ({5}/{6}sec)'.format(
                 prefix,
-                ANSI['green'],
+                ANSI['green' if pct_complete < 80 else 'lightyellow'],
                 (chunk * bar_width).ljust(chunks),
                 ANSI['reset'],
-                round(progress, 1),
+                round(pct_complete, 1),
                 round(s/chunks),
                 seconds,
             ))
@@ -150,7 +154,7 @@ def progress_bar(seconds: int, prefix: str='') -> None:
             time.sleep(1 / chunks)
 
         # ██████████████████████████████████ 100.0% (60/60sec)
-        sys.stdout.write('\r{0}{1}{2}{3} {4}% ({5}/{6}sec)\n'.format(
+        sys.stdout.write('\r{0}{1}{2}{3} {4}% ({5}/{6}sec)'.format(
             prefix,
             ANSI['red'],
             chunk * chunks,
@@ -160,6 +164,10 @@ def progress_bar(seconds: int, prefix: str='') -> None:
             seconds,
         ))
         sys.stdout.flush()
+        # uncomment to have it disappear when it hits 100% instead of staying full red:
+        # time.sleep(0.5)
+        # sys.stdout.write('\r{}{}\r'.format((' ' * TERM_WIDTH()), ANSI['reset']))
+        # sys.stdout.flush()
     except (KeyboardInterrupt, BrokenPipeError):
         print()
         pass
@@ -246,7 +254,7 @@ def log_archiving_started(num_links: int, resume: Optional[float]=None):
              **ANSI,
         ))
     else:
-        print('{green}[▶] [{}] Collecting content for {} Snapshots in archive...{reset}'.format(
+        print('{green}[▶] [{}] Starting archiving of {} snapshots in index...{reset}'.format(
              start_ts.strftime('%Y-%m-%d %H:%M:%S'),
              num_links,
              **ANSI,
@@ -264,8 +272,8 @@ def log_archiving_paused(num_links: int, idx: int, timestamp: str):
         total=num_links,
     ))
     print()
-    print('    {lightred}Hint:{reset} To view your archive index, open:'.format(**ANSI))
-    print('        {}/{}'.format(OUTPUT_DIR, HTML_INDEX_FILENAME))
+    print('    {lightred}Hint:{reset} To view your archive index, run:'.format(**ANSI))
+    print('        archivebox server  # then visit http://127.0.0.1:8000')
     print('    Continue archiving where you left off by running:')
     print('        archivebox update --resume={}'.format(timestamp))
 
@@ -291,10 +299,8 @@ def log_archiving_finished(num_links: int):
     print('    - {} links updated'.format(_LAST_RUN_STATS.succeeded + _LAST_RUN_STATS.failed))
     print('    - {} links had errors'.format(_LAST_RUN_STATS.failed))
     print()
-    print('    {lightred}Hint:{reset} To view your archive index, open:'.format(**ANSI))
-    print('        {}/{}'.format(OUTPUT_DIR, HTML_INDEX_FILENAME))
-    print('    Or run the built-in webserver:')
-    print('        archivebox server')
+    print('    {lightred}Hint:{reset} To manage your archive in a Web UI, run:'.format(**ANSI))
+    print('        archivebox server 0.0.0.0:8000')
 
 
 def log_link_archiving_started(link: "Link", link_dir: str, is_new: bool):
@@ -341,6 +347,21 @@ def log_archive_method_finished(result: "ArchiveResult"):
     )
 
     if result.status == 'failed':
+        if result.output.__class__.__name__ == 'TimeoutExpired':
+            duration = (result.end_ts - result.start_ts).seconds
+            hint_header = [
+                '{lightyellow}Extractor timed out after {}s.{reset}'.format(duration, **ANSI),
+            ]
+        else:
+            hint_header = [
+                '{lightyellow}Extractor failed:{reset}'.format(**ANSI),
+                '    {reset}{} {red}{}{reset}'.format(
+                    result.output.__class__.__name__.replace('ArchiveError', ''),
+                    result.output, 
+                    **ANSI,
+                ),
+            ]
+
         # Prettify error output hints string and limit to five lines
         hints = getattr(result.output, 'hints', None) or ()
         if hints:
@@ -350,14 +371,10 @@ def log_archive_method_finished(result: "ArchiveResult"):
                 for line in hints[:5] if line.strip()
             )
 
+
         # Collect and prefix output lines with indentation
         output_lines = [
-            '{lightyellow}Extractor failed:{reset}'.format(**ANSI),
-            '    {reset}{} {red}{}{reset}'.format(
-                result.output.__class__.__name__.replace('ArchiveError', ''),
-                result.output, 
-                **ANSI,
-            ),
+            *hint_header,
             *hints,
             '{}Run to see full output:{}'.format(ANSI['lightred'], ANSI['reset']),
             *(['    cd {};'.format(result.pwd)] if result.pwd else []),
@@ -390,7 +407,7 @@ def log_list_finished(links):
 def log_removal_started(links: List["Link"], yes: bool, delete: bool):
     print('{lightyellow}[i] Found {} matching URLs to remove.{reset}'.format(len(links), **ANSI))
     if delete:
-        file_counts = [link.num_outputs for link in links if os.path.exists(link.link_dir)]
+        file_counts = [link.num_outputs for link in links if Path(link.link_dir).exists()]
         print(
             f'    {len(links)} Links will be de-listed from the main index, and their archived content folders will be deleted from disk.\n'
             f'    ({len(file_counts)} data folders with {sum(file_counts)} archived files will be deleted!)'
@@ -427,11 +444,11 @@ def log_shell_welcome_msg():
     from .cli import list_subcommands
 
     print('{green}# ArchiveBox Imports{reset}'.format(**ANSI))
-    print('{green}from archivebox.core.models import Snapshot, User{reset}'.format(**ANSI))
+    print('{green}from core.models import Snapshot, User{reset}'.format(**ANSI))
     print('{green}from archivebox import *\n    {}{reset}'.format("\n    ".join(list_subcommands().keys()), **ANSI))
     print()
     print('[i] Welcome to the ArchiveBox Shell!')
-    print('    https://github.com/pirate/ArchiveBox/wiki/Usage#Shell-Usage')
+    print('    https://github.com/ArchiveBox/ArchiveBox/wiki/Usage#Shell-Usage')
     print()
     print('    {lightred}Hint:{reset} Example use:'.format(**ANSI))
     print('        print(Snapshot.objects.filter(is_archived=True).count())')
@@ -445,9 +462,9 @@ def log_shell_welcome_msg():
 @enforce_types
 def pretty_path(path: Union[Path, str]) -> str:
     """convert paths like .../ArchiveBox/archivebox/../output/abc into output/abc"""
-    pwd = os.path.abspath('.')
+    pwd = Path('.').resolve()
     # parent = os.path.abspath(os.path.join(pwd, os.path.pardir))
-    return str(path).replace(pwd + '/', './')
+    return str(path).replace(str(pwd) + '/', './')
 
 
 @enforce_types
@@ -461,36 +478,7 @@ def printable_filesize(num_bytes: Union[int, float]) -> str:
 
 @enforce_types
 def printable_folders(folders: Dict[str, Optional["Link"]],
-                      json: bool=False,
-                      html: bool=False,
-                      csv: Optional[str]=None,
                       with_headers: bool=False) -> str:
-    links = folders.values()
-    if json: 
-        from .index.json import to_json
-        if with_headers:
-            output = {
-                **MAIN_INDEX_HEADER,
-                'num_links': len(links),
-                'updated': datetime.now(),
-                'last_run_cmd': sys.argv,
-                'links': links,
-            }
-        else:
-            output = links
-        return to_json(output, indent=4, sort_keys=True)
-    elif html:
-        from .index.html import main_index_template
-        if with_headers:
-            output = main_index_template(links, True)
-        else:
-            from .index.html import MINIMAL_INDEX_TEMPLATE
-            output = main_index_template(links, True, MINIMAL_INDEX_TEMPLATE)
-        return output
-    elif csv:
-        from .index.csv import links_to_csv
-        return links_to_csv(folders.values(), cols=csv.split(','), header=with_headers)
-    
     return '\n'.join(
         f'{folder} {link and link.url} "{link and link.title}"'
         for folder, link in folders.items()
@@ -518,28 +506,33 @@ def printable_folder_status(name: str, folder: Dict) -> str:
         color, symbol, note, num_files = 'lightyellow', '-', 'disabled', '-'
 
     if folder['path']:
-        if os.path.exists(folder['path']):
+        if Path(folder['path']).exists():
             num_files = (
                 f'{len(os.listdir(folder["path"]))} files'
-                if os.path.isdir(folder['path']) else
-                printable_filesize(os.path.getsize(folder['path']))
+                if Path(folder['path']).is_dir() else
+                printable_filesize(Path(folder['path']).stat().st_size)
             )
         else:
             num_files = 'missing'
 
-        if ' ' in str(folder['path']):
-            folder['path'] = f'"{folder["path"]}"'
+    path = str(folder['path']).replace(str(OUTPUT_DIR), '.') if folder['path'] else ''
+    if path and ' ' in path:
+        path = f'"{path}"'
+
+    # if path is just a plain dot, replace it back with the full path for clarity
+    if path == '.':
+        path = str(OUTPUT_DIR)
 
     return ' '.join((
         ANSI[color],
         symbol,
         ANSI['reset'],
-        name.ljust(22),
-        (str(folder["path"]) or '').ljust(76),
+        name.ljust(21),
         num_files.ljust(14),
         ANSI[color],
-        note,
+        note.ljust(8),
         ANSI['reset'],
+        path.ljust(76),
     ))
 
 
@@ -559,17 +552,18 @@ def printable_dependency_version(name: str, dependency: Dict) -> str:
     else:
         color, symbol, note, version = 'lightyellow', '-', 'disabled', '-'
 
-    if ' ' in (dependency["path"] or ''):
-        dependency["path"] = f'"{dependency["path"]}"'
+    path = str(dependency["path"]).replace(str(OUTPUT_DIR), '.') if dependency["path"] else ''
+    if path and ' ' in path:
+        path = f'"{path}"'
 
     return ' '.join((
         ANSI[color],
         symbol,
         ANSI['reset'],
-        name.ljust(22),
-        (dependency["path"] or '').ljust(76),
+        name.ljust(21),
         version.ljust(14),
         ANSI[color],
-        note,
+        note.ljust(8),
         ANSI['reset'],
+        path.ljust(76),
     ))

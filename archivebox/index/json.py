@@ -8,7 +8,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Iterator, Any, Union
 
-from .schema import Link, ArchiveResult
+from .schema import Link
 from ..system import atomic_write
 from ..util import enforce_types
 from ..config import (
@@ -32,21 +32,34 @@ MAIN_INDEX_HEADER = {
         'version': VERSION,
         'git_sha': GIT_SHA,
         'website': 'https://ArchiveBox.io',
-        'docs': 'https://github.com/pirate/ArchiveBox/wiki',
-        'source': 'https://github.com/pirate/ArchiveBox',
-        'issues': 'https://github.com/pirate/ArchiveBox/issues',
+        'docs': 'https://github.com/ArchiveBox/ArchiveBox/wiki',
+        'source': 'https://github.com/ArchiveBox/ArchiveBox',
+        'issues': 'https://github.com/ArchiveBox/ArchiveBox/issues',
         'dependencies': DEPENDENCIES,
     },
 }
 
-### Main Links Index
+@enforce_types
+def generate_json_index_from_links(links: List[Link], with_headers: bool):
+    if with_headers:
+        output = {
+            **MAIN_INDEX_HEADER,
+            'num_links': len(links),
+            'updated': datetime.now(),
+            'last_run_cmd': sys.argv,
+            'links': links,
+        }
+    else:
+        output = links
+    return to_json(output, indent=4, sort_keys=True)
+
 
 @enforce_types
 def parse_json_main_index(out_dir: Path=OUTPUT_DIR) -> Iterator[Link]:
     """parse an archive index json file and return the list of links"""
 
-    index_path = os.path.join(out_dir, JSON_INDEX_FILENAME)
-    if os.path.exists(index_path):
+    index_path = Path(out_dir) / JSON_INDEX_FILENAME
+    if index_path.exists():
         with open(index_path, 'r', encoding='utf-8') as f:
             links = pyjson.load(f)['links']
             for link_json in links:
@@ -65,30 +78,6 @@ def parse_json_main_index(out_dir: Path=OUTPUT_DIR) -> Iterator[Link]:
                             continue
     return ()
 
-@enforce_types
-def write_json_main_index(links: List[Link], out_dir: Path=OUTPUT_DIR) -> None:
-    """write the json link index to a given path"""
-
-    assert isinstance(links, List), 'Links must be a list, not a generator.'
-    assert not links or isinstance(links[0].history, dict)
-    assert not links or isinstance(links[0].sources, list)
-
-    if links and links[0].history.get('title'):
-        assert isinstance(links[0].history['title'][0], ArchiveResult)
-
-    if links and links[0].sources:
-        assert isinstance(links[0].sources[0], str)
-
-    main_index_json = {
-        **MAIN_INDEX_HEADER,
-        'num_links': len(links),
-        'updated': datetime.now(),
-        'last_run_cmd': sys.argv,
-        'links': links,
-    }
-    atomic_write(os.path.join(out_dir, JSON_INDEX_FILENAME), main_index_json)
-
-
 ### Link Details Index
 
 @enforce_types
@@ -96,15 +85,15 @@ def write_json_link_details(link: Link, out_dir: Optional[str]=None) -> None:
     """write a json file with some info about the link"""
     
     out_dir = out_dir or link.link_dir
-    path = os.path.join(out_dir, JSON_INDEX_FILENAME)
-    atomic_write(path, link._asdict(extended=True))
+    path = Path(out_dir) / JSON_INDEX_FILENAME
+    atomic_write(str(path), link._asdict(extended=True))
 
 
 @enforce_types
 def parse_json_link_details(out_dir: Union[Path, str], guess: Optional[bool]=False) -> Optional[Link]:
     """load the json link index from a given directory"""
-    existing_index = os.path.join(out_dir, JSON_INDEX_FILENAME)
-    if os.path.exists(existing_index):
+    existing_index = Path(out_dir) / JSON_INDEX_FILENAME
+    if existing_index.exists():
         with open(existing_index, 'r', encoding='utf-8') as f:
             try:
                 link_json = pyjson.load(f)
@@ -118,9 +107,9 @@ def parse_json_link_details(out_dir: Union[Path, str], guess: Optional[bool]=Fal
 def parse_json_links_details(out_dir: Union[Path, str]) -> Iterator[Link]:
     """read through all the archive data folders and return the parsed links"""
 
-    for entry in os.scandir(os.path.join(out_dir, ARCHIVE_DIR_NAME)):
+    for entry in os.scandir(Path(out_dir) / ARCHIVE_DIR_NAME):
         if entry.is_dir(follow_symlinks=True):
-            if os.path.exists(os.path.join(entry.path, 'index.json')):
+            if (Path(entry.path) / 'index.json').exists():
                 try:
                     link = parse_json_link_details(entry.path)
                 except KeyError:

@@ -1,11 +1,11 @@
 __package__ = 'archivebox'
 
 import re
-from pathlib import Path
+import requests
 import json as pyjson
 
-
 from typing import List, Optional, Any
+from pathlib import Path
 from inspect import signature
 from functools import wraps
 from hashlib import sha256
@@ -13,10 +13,9 @@ from urllib.parse import urlparse, quote, unquote
 from html import escape, unescape
 from datetime import datetime
 from dateparser import parse as dateparser
+from requests.exceptions import RequestException, ReadTimeout
 
-import requests
-from requests.exceptions import RequestException
-from base32_crockford import encode as base32_encode                            # type: ignore
+from .vendor.base32_crockford import encode as base32_encode                            # type: ignore
 from w3lib.encoding import html_body_declared_encoding, http_content_type_encoding
 
 try:
@@ -186,10 +185,12 @@ def get_headers(url: str, timeout: int=None) -> str:
             headers={'User-Agent': WGET_USER_AGENT},
             verify=CHECK_SSL_VALIDITY,
             timeout=timeout,
-            allow_redirects=True
+            allow_redirects=True,
         )
         if response.status_code >= 400:
             raise RequestException
+    except ReadTimeout:
+        raise
     except RequestException:
         response = requests.get(
             url,
@@ -199,7 +200,13 @@ def get_headers(url: str, timeout: int=None) -> str:
             stream=True
         )
     
-    return pyjson.dumps(dict(response.headers), indent=4)
+    return pyjson.dumps(
+        {
+            'Status-Code': response.status_code,
+            **dict(response.headers),
+        },
+        indent=4,
+    )
 
 
 @enforce_types
@@ -243,6 +250,7 @@ def chrome_args(**options) -> List[str]:
         cmd_args.append('--user-data-dir={}'.format(options['CHROME_USER_DATA_DIR']))
     
     return cmd_args
+
 
 def ansi_to_html(text):
     """

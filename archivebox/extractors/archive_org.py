@@ -13,6 +13,7 @@ from ..util import (
 )
 from ..config import (
     TIMEOUT,
+    CURL_ARGS,
     CHECK_SSL_VALIDITY,
     SAVE_ARCHIVE_DOT_ORG,
     CURL_BINARY,
@@ -24,12 +25,12 @@ from ..logging_util import TimedProgress
 
 
 @enforce_types
-def should_save_archive_dot_org(link: Link, out_dir: Optional[Path]=None) -> bool:
-    out_dir = out_dir or Path(link.link_dir)
+def should_save_archive_dot_org(link: Link, out_dir: Optional[Path]=None, overwrite: Optional[bool]=False) -> bool:
     if is_static_file(link.url):
         return False
 
-    if (out_dir / "archive.org.txt").exists():
+    out_dir = out_dir or Path(link.link_dir)
+    if not overwrite and (out_dir / 'archive.org.txt').exists():
         # if open(path, 'r').read().strip() != 'None':
         return False
 
@@ -45,10 +46,8 @@ def save_archive_dot_org(link: Link, out_dir: Optional[Path]=None, timeout: int=
     submit_url = 'https://web.archive.org/save/{}'.format(link.url)
     cmd = [
         CURL_BINARY,
-        '--silent',
-        '--location',
+        *CURL_ARGS,
         '--head',
-        '--compressed',
         '--max-time', str(timeout),
         *(['--user-agent', '{}'.format(CURL_USER_AGENT)] if CURL_USER_AGENT else []),
         *([] if CHECK_SSL_VALIDITY else ['--insecure']),
@@ -60,7 +59,7 @@ def save_archive_dot_org(link: Link, out_dir: Optional[Path]=None, timeout: int=
         result = run(cmd, cwd=str(out_dir), timeout=timeout)
         content_location, errors = parse_archive_dot_org_response(result.stdout)
         if content_location:
-            archive_org_url = 'https://web.archive.org{}'.format(content_location[0])
+            archive_org_url = content_location[0]
         elif len(errors) == 1 and 'RobotAccessControlException' in errors[0]:
             archive_org_url = None
             # raise ArchiveError('Archive.org denied by {}/robots.txt'.format(domain(link.url)))

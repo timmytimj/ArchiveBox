@@ -5,14 +5,14 @@
 #     docker-compose run archivebox add --depth=1 https://example.com/some/feed.rss
 #     docker-compose run archivebox config --set PUBLIC_INDEX=True
 # Documentation:
-#     https://github.com/pirate/ArchiveBox/wiki/Docker#docker-compose
+#     https://github.com/ArchiveBox/ArchiveBox/wiki/Docker#docker-compose
 
 version: '3.7'
 
 services:
     archivebox:
         # build: .
-        image: nikisweeting/archivebox:latest
+        image: ${DOCKER_IMAGE:-archivebox/archivebox:latest} 
         command: server 0.0.0.0:8000
         stdin_open: true
         tty: true
@@ -21,16 +21,31 @@ services:
         environment:
             - USE_COLOR=True
             - SHOW_PROGRESS=False
+            - SEARCH_BACKEND_ENGINE=sonic
+            - SEARCH_BACKEND_HOST_NAME=sonic
+            - SEARCH_BACKEND_PASSWORD=SecretPassword
         volumes:
             - ./data:/data
-
+        depends_on:
+            - sonic
+    
+    # Run sonic search backend
+    sonic:
+        image: valeriansaliou/sonic:v1.3.0    
+        ports:
+            - 1491:1491
+        environment:
+            - SEARCH_BACKEND_PASSWORD=SecretPassword
+        volumes:
+            - ./etc/sonic/config.cfg:/etc/sonic.cfg
+            - ./data:/var/lib/sonic/store/
 
     # Optional Addons: tweak these examples as needed for your specific use case
 
     # Example: Run scheduled imports in a docker instead of using cron on the
     # host machine, add tasks and see more info with archivebox schedule --help
     # scheduler:
-    #    image: nikisweeting/archivebox:latest
+    #    image: archivebox/archivebox:latest
     #    command: schedule --foreground --every=day --depth=1 'https://getpocket.com/users/USERNAME/feed/all'
     #    environment:
     #        - USE_COLOR=True
@@ -73,3 +88,4 @@ services:
     #     volumes:
     #         ./data:/archivebox
     #         ./data/wayback:/webarchive
+    

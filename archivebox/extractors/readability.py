@@ -46,13 +46,15 @@ def get_html(link: Link, path: Path) -> str:
         return document
 
 @enforce_types
-def should_save_readability(link: Link, out_dir: Optional[str]=None) -> bool:
-    out_dir = out_dir or link.link_dir
+def should_save_readability(link: Link, out_dir: Optional[str]=None, overwrite: Optional[bool]=False) -> bool:
     if is_static_file(link.url):
         return False
 
-    output = Path(out_dir or link.link_dir) / 'readability'
-    return SAVE_READABILITY and READABILITY_VERSION and (not output.exists())
+    out_dir = out_dir or Path(link.link_dir)
+    if not overwrite and (out_dir / 'readability').exists():
+        return False
+
+    return SAVE_READABILITY
 
 
 @enforce_types
@@ -71,6 +73,7 @@ def save_readability(link: Link, out_dir: Optional[str]=None, timeout: int=TIMEO
         CURL_BINARY,
         link.url
     ]
+    readability_content = None
     timer = TimedProgress(timeout, prefix='      ')
     try:
         document = get_html(link, out_dir)
@@ -86,8 +89,9 @@ def save_readability(link: Link, out_dir: Optional[str]=None, timeout: int=TIMEO
         result = run(cmd, cwd=out_dir, timeout=timeout)
         result_json = json.loads(result.stdout)
         output_folder.mkdir(exist_ok=True)
+        readability_content = result_json.pop("textContent") 
         atomic_write(str(output_folder / "content.html"), result_json.pop("content"))
-        atomic_write(str(output_folder / "content.txt"), result_json.pop("textContent"))
+        atomic_write(str(output_folder / "content.txt"), readability_content)
         atomic_write(str(output_folder / "article.json"), result_json)
 
         # parse out number of files downloaded from last line of stderr:
@@ -117,5 +121,6 @@ def save_readability(link: Link, out_dir: Optional[str]=None, timeout: int=TIMEO
         cmd_version=READABILITY_VERSION,
         output=output,
         status=status,
-        **timer.stats,
+        index_texts= [readability_content] if readability_content else [],
+        **timer.stats,  
     )

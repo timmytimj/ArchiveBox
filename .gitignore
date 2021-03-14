@@ -3,14 +3,24 @@
 *.pyc
 __pycache__/
 .mypy_cache/
+.eggs/
+tests/out/
 
+# Python and Node dependencies
 venv/
 .venv/
 .docker-venv/
-
-build/
-dist/
 node_modules/
 
+# Packaging artifacts
+archivebox.egg-info
+archivebox-*.tar.gz
+build/
+dist/
+
+# Data folders
 data/
+data1/
+data2/
+data3/
 output/

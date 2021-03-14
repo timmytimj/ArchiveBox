@@ -8,7 +8,6 @@ For examples of supported import formats see tests/.
 __package__ = 'archivebox.parsers'
 
 import re
-import os
 from io import StringIO
 
 from typing import IO, Tuple, List, Optional
@@ -33,7 +32,9 @@ from ..index.schema import Link
 from ..logging_util import TimedProgress, log_source_saved
 
 from .pocket_html import parse_pocket_html_export
+from .pocket_api import parse_pocket_api_export
 from .pinboard_rss import parse_pinboard_rss_export
+from .wallabag_atom import parse_wallabag_atom_export
 from .shaarli_rss import parse_shaarli_rss_export
 from .medium_rss import parse_medium_rss_export
 from .netscape_html import parse_netscape_html_export
@@ -44,6 +45,8 @@ from .generic_txt import parse_generic_txt_export
 
 PARSERS = (
     # Specialized parsers
+    ('Pocket API', parse_pocket_api_export),
+    ('Wallabag ATOM', parse_wallabag_atom_export),
     ('Pocket HTML', parse_pocket_html_export),
     ('Pinboard RSS', parse_pinboard_rss_export),
     ('Shaarli RSS', parse_shaarli_rss_export),
@@ -128,7 +131,7 @@ def run_parser_functions(to_parse: IO[str], timer, root_url: Optional[str]=None)
 @enforce_types
 def save_text_as_source(raw_text: str, filename: str='{ts}-stdin.txt', out_dir: Path=OUTPUT_DIR) -> str:
     ts = str(datetime.now().timestamp()).split('.', 1)[0]
-    source_path = os.path.join(out_dir, SOURCES_DIR_NAME, filename.format(ts=ts))
+    source_path = str(out_dir / SOURCES_DIR_NAME / filename.format(ts=ts))
     atomic_write(source_path, raw_text)
     log_source_saved(source_file=source_path)
     return source_path
@@ -138,7 +141,7 @@ def save_text_as_source(raw_text: str, filename: str='{ts}-stdin.txt', out_dir: 
 def save_file_as_source(path: str, timeout: int=TIMEOUT, filename: str='{ts}-{basename}.txt', out_dir: Path=OUTPUT_DIR) -> str:
     """download a given url's content into output/sources/domain-<timestamp>.txt"""
     ts = str(datetime.now().timestamp()).split('.', 1)[0]
-    source_path = os.path.join(OUTPUT_DIR, SOURCES_DIR_NAME, filename.format(basename=basename(path), ts=ts))
+    source_path = str(OUTPUT_DIR / SOURCES_DIR_NAME / filename.format(basename=basename(path), ts=ts))
 
     if any(path.startswith(s) for s in ('http://', 'https://', 'ftp://')):
         # Source is a URL that needs to be downloaded

@@ -39,11 +39,17 @@ def atomic_write(path: Union[Path, str], contents: Union[dict, str, bytes], over
     mode = 'wb+' if isinstance(contents, bytes) else 'w'
 
     # print('\n> Atomic Write:', mode, path, len(contents), f'overwrite={overwrite}')
-    with lib_atomic_write(path, mode=mode, overwrite=overwrite) as f:
-        if isinstance(contents, dict):
-            dump(contents, f, indent=4, sort_keys=True, cls=ExtendedEncoder)
-        elif isinstance(contents, (bytes, str)):
-            f.write(contents)
+    try:
+        with lib_atomic_write(path, mode=mode, overwrite=overwrite) as f:
+            if isinstance(contents, dict):
+                dump(contents, f, indent=4, sort_keys=True, cls=ExtendedEncoder)
+            elif isinstance(contents, (bytes, str)):
+                f.write(contents)
+    except OSError as e:
+        print(f"[X] OSError: Failed to write {path} with fcntl.F_FULLFSYNC. ({e})")
+        print("    You can store the archive/ subfolder on a hard drive or network share that doesn't support support syncronous writes,")
+        print("    but the main folder containing the index.sqlite3 and ArchiveBox.conf files must be on a filesystem that supports FSYNC.")
+        raise SystemExit(1)
     os.chmod(path, int(OUTPUT_PERMISSIONS, base=8))
 
 @enforce_types
@@ -62,9 +68,9 @@ def chmod_file(path: str, cwd: str='.', permissions: str=OUTPUT_PERMISSIONS) -> 
 
 
 @enforce_types
-def copy_and_overwrite(from_path: str, to_path: str):
+def copy_and_overwrite(from_path: Union[str, Path], to_path: Union[str, Path]):
     """copy a given file or directory to a given path, overwriting the destination"""
-    if os.path.isdir(from_path):
+    if Path(from_path).is_dir():
         shutil.rmtree(to_path, ignore_errors=True)
         shutil.copytree(from_path, to_path)
     else:
@@ -74,7 +80,7 @@ def copy_and_overwrite(from_path: str, to_path: str):
 
 
 @enforce_types
-def get_dir_size(path: str, recursive: bool=True, pattern: Optional[str]=None) -> Tuple[int, int, int]:
+def get_dir_size(path: Union[str, Path], recursive: bool=True, pattern: Optional[str]=None) -> Tuple[int, int, int]:
     """get the total disk size of a given directory, optionally summing up 
        recursively and limiting to a given filter list
     """
@@ -115,3 +121,43 @@ def dedupe_cron_jobs(cron: CronTab) -> CronTab:
         job.enable()
 
     return cron
+
+
+class suppress_output(object):
+    '''
+    A context manager for doing a "deep suppression" of stdout and stderr in 
+    Python, i.e. will suppress all print, even if the print originates in a 
+    compiled C/Fortran sub-function.
+       This will not suppress raised exceptions, since exceptions are printed
+    to stderr just before a script exits, and after the context manager has
+    exited (at least, I think that is why it lets exceptions through).      
+
+    with suppress_stdout_stderr():
+        rogue_function()
+    '''
+    def __init__(self, stdout=True, stderr=True):
+        # Open a pair of null files
+        # Save the actual stdout (1) and stderr (2) file descriptors.
+        self.stdout, self.stderr = stdout, stderr
+        if stdout:
+            self.null_stdout = os.open(os.devnull, os.O_RDWR)
+            self.real_stdout = os.dup(1)
+        if stderr:
+            self.null_stderr = os.open(os.devnull, os.O_RDWR)
+            self.real_stderr = os.dup(2)
+
+    def __enter__(self):
+        # Assign the null pointers to stdout and stderr.
+        if self.stdout:
+            os.dup2(self.null_stdout, 1)
+        if self.stderr:
+            os.dup2(self.null_stderr, 2)
+
+    def __exit__(self, *_):
+        # Re-assign the real stdout/stderr back to (1) and (2)
+        if self.stdout:
+            os.dup2(self.real_stdout, 1)
+            os.close(self.null_stdout)
+        if self.stderr:
+            os.dup2(self.real_stderr, 2)
+            os.close(self.null_stderr)

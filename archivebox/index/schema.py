@@ -1,6 +1,13 @@
+"""
+
+WARNING: THIS FILE IS ALL LEGACY CODE TO BE REMOVED.
+
+DO NOT ADD ANY NEW FEATURES TO THIS FILE, NEW CODE GOES HERE: core/models.py
+
+"""
+
 __package__ = 'archivebox.index'
 
-import os
 from pathlib import Path
 
 from datetime import datetime, timedelta
@@ -32,6 +39,7 @@ class ArchiveResult:
     status: str
     start_ts: datetime
     end_ts: datetime
+    index_texts: Union[List[str], None] = None
     schema: str = 'ArchiveResult'
 
     def __post_init__(self):
@@ -47,11 +55,11 @@ class ArchiveResult:
         assert isinstance(self.end_ts, datetime)
         assert isinstance(self.cmd, list)
         assert all(isinstance(arg, str) and arg for arg in self.cmd)
-        assert self.pwd is None or isinstance(self.pwd, str) and self.pwd
-        assert self.cmd_version is None or isinstance(self.cmd_version, str) and self.cmd_version
+
+        # TODO: replace emptystrings in these three with None / remove them from the DB
+        assert self.pwd is None or isinstance(self.pwd, str)
+        assert self.cmd_version is None or isinstance(self.cmd_version, str)
         assert self.output is None or isinstance(self.output, (str, Exception))
-        if isinstance(self.output, str):
-            assert self.output
 
     @classmethod
     def guess_ts(_cls, dict_info):
@@ -208,6 +216,10 @@ class Link:
             })
         return info
 
+    def as_snapshot(self):
+        from core.models import Snapshot
+        return Snapshot.objects.get(url=self.url)
+
     @classmethod
     def from_json(cls, json_info, guess=False):
         from ..util import parse_date
@@ -250,7 +262,7 @@ class Link:
     @property
     def link_dir(self) -> str:
         from ..config import CONFIG
-        return os.path.join(CONFIG['ARCHIVE_DIR'], self.timestamp)
+        return str(Path(CONFIG['ARCHIVE_DIR']) / self.timestamp)
 
     @property
     def archive_path(self) -> str:
@@ -340,7 +352,7 @@ class Link:
     ### Archive Status Helpers
     @property
     def num_outputs(self) -> int:
-        return len(tuple(filter(None, self.latest_outputs().values())))
+        return self.as_snapshot().num_outputs
 
     @property
     def num_failures(self) -> int:
@@ -369,7 +381,7 @@ class Link:
         )
 
         return any(
-            os.path.exists(os.path.join(ARCHIVE_DIR, self.timestamp, path))
+            (Path(ARCHIVE_DIR) / self.timestamp / path).exists()
             for path in output_paths
         )
 
@@ -400,12 +412,14 @@ class Link:
         """predict the expected output paths that should be present after archiving"""
 
         from ..extractors.wget import wget_output_path
+        # TODO: banish this awful duplication from the codebase and import these
+        # from their respective extractor files
         canonical = {
             'index_path': 'index.html',
             'favicon_path': 'favicon.ico',
             'google_favicon_path': 'https://www.google.com/s2/favicons?domain={}'.format(self.domain),
             'wget_path': wget_output_path(self),
-            'warc_path': 'warc',
+            'warc_path': 'warc/',
             'singlefile_path': 'singlefile.html',
             'readability_path': 'readability/content.html',
             'mercury_path': 'mercury/content.html',
@@ -413,8 +427,9 @@ class Link:
             'screenshot_path': 'screenshot.png',
             'dom_path': 'output.html',
             'archive_org_path': 'https://web.archive.org/web/{}'.format(self.base_url),
-            'git_path': 'git',
-            'media_path': 'media',
+            'git_path': 'git/',
+            'media_path': 'media/',
+            'headers_path': 'headers.json',
         }
         if self.is_static:
             # static binary files like PDF and images are handled slightly differently.

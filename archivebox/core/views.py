@@ -9,36 +9,39 @@ from django.http import HttpResponse
 from django.views import View, static
 from django.views.generic.list import ListView
 from django.views.generic import FormView
+from django.db.models import Q
 from django.contrib.auth.mixins import UserPassesTestMixin
 
 from core.models import Snapshot
-from core.utils import get_icons
 from core.forms import AddLinkForm
 
 from ..config import (
     OUTPUT_DIR,
     PUBLIC_INDEX,
     PUBLIC_SNAPSHOTS,
-    PUBLIC_ADD_VIEW
+    PUBLIC_ADD_VIEW,
+    VERSION,
+    FOOTER_INFO,
 )
 from main import add
 from ..util import base_url, ansi_to_html
+from ..index.html import snapshot_icons
 
 
-class MainIndex(View):
-    template = 'main_index.html'
-
+class HomepageView(View):
     def get(self, request):
         if request.user.is_authenticated:
             return redirect('/admin/core/snapshot/')
 
         if PUBLIC_INDEX:
-            return redirect('public-index')
+            return redirect('/public')
         
         return redirect(f'/admin/login/?next={request.path}')
 
 
-class LinkDetails(View):
+class SnapshotView(View):
+    # render static html index from filesystem archive/<timestamp>/index.html
+
     def get(self, request, path):
         # missing trailing slash -> redirect to index
         if '/' not in path:
@@ -88,18 +91,26 @@ class LinkDetails(View):
             status=404,
         )
 
-class PublicArchiveView(ListView):
-    template = 'snapshot_list.html'
+class PublicIndexView(ListView):
+    template_name = 'public_index.html'
     model = Snapshot
     paginate_by = 100
+    ordering = ['title']
+
+    def get_context_data(self, **kwargs):
+        return {
+            **super().get_context_data(**kwargs),
+            'VERSION': VERSION,
+            'FOOTER_INFO': FOOTER_INFO,
+        }
 
     def get_queryset(self, **kwargs): 
         qs = super().get_queryset(**kwargs) 
         query = self.request.GET.get('q')
         if query:
-            qs = Snapshot.objects.filter(title__icontains=query)
+            qs = qs.filter(Q(title__icontains=query) | Q(url__icontains=query) | Q(timestamp__icontains=query) | Q(tags__name__icontains=query))
         for snapshot in qs:
-            snapshot.icons = get_icons(snapshot) 
+            snapshot.icons = snapshot_icons(snapshot)
         return qs
 
     def get(self, *args, **kwargs):
@@ -111,27 +122,44 @@ class PublicArchiveView(ListView):
 
 
 class AddView(UserPassesTestMixin, FormView):
-    template_name = "add_links.html"
+    template_name = "add.html"
     form_class = AddLinkForm
+
+    def get_initial(self):
+        """Prefill the AddLinkForm with the 'url' GET parameter"""
+        if self.request.method == 'GET':
+            url = self.request.GET.get('url', None)
+            if url:
+                return {'url': url}
+        else:
+            return super().get_initial()
 
     def test_func(self):
         return PUBLIC_ADD_VIEW or self.request.user.is_authenticated
 
-    def get_context_data(self, *args, **kwargs):
-        context = super().get_context_data(*args, **kwargs)
-        context["title"] = "Add URLs"
-        return context
+    def get_context_data(self, **kwargs):
+        return {
+            **super().get_context_data(**kwargs),
+            'title': "Add URLs",
+            # We can't just call request.build_absolute_uri in the template, because it would include query parameters
+            'absolute_add_path': self.request.build_absolute_uri(self.request.path),
+            'VERSION': VERSION,
+            'FOOTER_INFO': FOOTER_INFO,
+        }
 
     def form_valid(self, form):
         url = form.cleaned_data["url"]
         print(f'[+] Adding URL: {url}')
         depth = 0 if form.cleaned_data["depth"] == "0" else 1
+        extractors = ','.join(form.cleaned_data["archive_methods"])
         input_kwargs = {
             "urls": url,
             "depth": depth,
             "update_all": False,
             "out_dir": OUTPUT_DIR,
         }
+        if extractors:
+            input_kwargs.update({"extractors": extractors})
         add_stdout = StringIO()
         with redirect_stdout(add_stdout):
             add(**input_kwargs)

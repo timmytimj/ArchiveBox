@@ -5,18 +5,21 @@ import os
 import sys
 import argparse
 
-from typing import Optional, Dict, List, IO
+from typing import Optional, Dict, List, IO, Union
+from pathlib import Path
 
 from ..config import OUTPUT_DIR
 
 from importlib import import_module
 
-CLI_DIR = os.path.dirname(os.path.abspath(__file__))
+CLI_DIR = Path(__file__).resolve().parent
 
 # these common commands will appear sorted before any others for ease-of-use
 meta_cmds = ('help', 'version')
 main_cmds = ('init', 'info', 'config')
-archive_cmds = ('add', 'remove', 'update', 'list')
+archive_cmds = ('add', 'remove', 'update', 'list', 'status')
+
+fake_db = ("oneshot",)
 
 display_first = (*meta_cmds, *main_cmds, *archive_cmds)
 
@@ -55,8 +58,12 @@ def list_subcommands() -> Dict[str, str]:
 def run_subcommand(subcommand: str,
                    subcommand_args: List[str]=None,
                    stdin: Optional[IO]=None,
-                   pwd: Optional[str]=None) -> None:
+                   pwd: Union[Path, str, None]=None) -> None:
     """Run a given ArchiveBox subcommand with the given list of args"""
+
+    if subcommand not in meta_cmds:
+        from ..config import setup_django
+        setup_django(in_memory_db=subcommand in fake_db, check_db=subcommand in archive_cmds)
 
     module = import_module('.archivebox_{}'.format(subcommand), __package__)
     module.main(args=subcommand_args, stdin=stdin, pwd=pwd)    # type: ignore
@@ -133,3 +140,5 @@ __all__ = (
     'run_subcommand',
     *SUBCOMMANDS.keys(),
 )
+
+
